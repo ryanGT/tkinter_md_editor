@@ -373,11 +373,13 @@ class md_gui(tk.Tk, tkinter_utils.abstract_window):
 
     def set_highlights(self, *args, **kwargs):
         self.text.tag_configure("titles", foreground="blue", font=("Times New Roman bold", 22))
+        self.text.tag_configure("section", foreground="red", font=("Times New Roman bold", 24))
 
 
     def run_highlights(self, *args, **kwargs):
         print("running set_highlights")
         self.text.highlight_pattern("^##.*$", "titles", regexp=True)
+        self.text.highlight_pattern("^# .*$", "section", regexp=True)
 
 
     ## def load_params(self):
