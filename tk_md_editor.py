@@ -3,7 +3,7 @@
 Working on an editor to make it easier to create lecture presentations
 in markdown with beamer slides as the assumed output.
 """
-import os, glob, rwkos, relpath, re
+import os, glob, rwkos, relpath, re, subprocess, time, txt_mixin
 
 ############################################
 #
@@ -44,6 +44,21 @@ import os, glob, rwkos, relpath, re
 #  
 #iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii
 
+from subprocess import Popen, PIPE
+from threading import Timer
+
+def run(cmd, timeout_sec=10):
+    proc = Popen(cmd, shell=True, stdout=PIPE, stderr=PIPE)
+    timer = Timer(timeout_sec, proc.kill)
+    stdout = ""
+    stderr = -1
+    try:
+        timer.start()
+        stdout, stderr = proc.communicate()
+    finally:
+        timer.cancel()
+    return stdout, stderr
+
 
 class_prep_root = "/Users/kraussry/class_prep_445_SS22/"
 
@@ -57,6 +72,7 @@ from tkinter.messagebox import showinfo
 import tkinter_utils
 
 from new_lecture_title_dialog import new_lecture_title_dialog
+from get_slide_number_dialog import get_slide_number_dialog
 
 import os, txt_mixin
 
@@ -198,7 +214,10 @@ class md_gui(tk.Tk, tkinter_utils.abstract_window):
     def print_attrs(self, attr_list=['class_dir', 'classnum', 'main_tex_name', 'main_pdf_name']):
         for var in attr_list:
             val = getattr(self, var)
-            print("%s: %s" % (var, val))
+            #print("%s: %s" % (var, val))
+            myline = "%s: %s" % (var, val)
+            self.append_to_log(myline)
+            
 
 
     def get_classnum_from_md_path(self, md_path):
@@ -207,10 +226,40 @@ class md_gui(tk.Tk, tkinter_utils.abstract_window):
         q = p.match(md_name)
         if q is not None:
             self.classnum = int(q.group(1))
+            return self.classnum
         else:
             print("md_name did not match pattern: %s" % md_name)
+            
+
+    def choose_main_md_file_from_dialog(self):
+        if hasattr(self, "class_dir"):
+            init_dir = self.class_dir
+        else:
+            init_dir = os.getcwd()
+        fname = tk.filedialog.askopenfilename(filetypes=(("markdown files", "*.md"),\
+                                                         ("All files", "*.*")), \
+                                              initialdir=(init_dir))
+        if fname:
+            self.append_to_log("fname: %s" % fname)
+            self.set_main_folder_and_files(fname)
 
 
+    def _get_classnum(self):
+        if hasattr(self, "classnum") and self.classnum > 0:
+            return self.classnum
+        return None
+    
+
+    def set_label(self):
+        classnum = self._get_classnum()
+        print("classnum = %s" % classnum)
+        if classnum:
+            mylabel = "Class %i: %s" % (classnum, self.main_md_name)
+        else:
+            mylabel = self.main_md_name
+        self.label['text'] = mylabel
+
+                
     def set_main_folder_and_files(self, md_path):
         """Set the main md and pdf files along with the working
         directory based on the fullpath of the main md_file."""
@@ -219,14 +268,17 @@ class md_gui(tk.Tk, tkinter_utils.abstract_window):
                "This does not apprear to be a valid md slides filename: %s" % md_path
         # if we aren't in a class prep folder, classnum is irrelevant
         if class_prep_root in md_path:
+            self.append_to_log("trying to get class num")
             self.classnum = self.get_classnum_from_md_path(md_path)
         else:
-            self.classnum = -1#this becomes a flag for non-class prep usage 
+            self.classnum = -1#this becomes a flag for non-class prep usage
+        print("self.classnum = %s" % self.classnum)
         self.class_dir = folder
         self.main_md_name = md_name
-        os.chdir(self.class_dir)
         self.set_pdf_and_tex_names_from_md_name(md_name)
         self.print_attrs()
+        self.set_label()
+        self.set_cwd()
 
 
     def insert_text(self, text, pos='end'):
@@ -243,6 +295,13 @@ class md_gui(tk.Tk, tkinter_utils.abstract_window):
         self.insert_text(text, pos='end')
 
 
+    def append_to_log(self, text):
+        if text[-1] != '\n':
+            text += '\n'
+        self.log_box.insert('end',text)
+        self.log_box.see('end')
+        
+        
     def start_new_pres(self, new_title):
         # - open the main md file
         # - insert # title
@@ -262,7 +321,19 @@ class md_gui(tk.Tk, tkinter_utils.abstract_window):
         slides_pat = os.path.join(folderpath, "*_slides.md")
         main_md_path = rwkos.find_one_glob(slides_pat)
         self.set_main_folder_and_files(main_md_path)
-        
+
+
+    def set_cwd(self):
+        print("curdir: %s" % os.getcwd())
+        if not hasattr(self, "class_dir"):
+            self.append_to_log("self.class_dir not set")
+        elif not self.class_dir:
+            self.append_to_log("self.class_dir is None or empty str")
+        else:
+            self.append_to_log("setting cwd to %s" % self.class_dir)
+            os.chdir(self.class_dir)
+            
+            
 
     def guess_main_folder_and_files(self):
         self.classnum = find_current_class_number()
@@ -270,7 +341,8 @@ class md_gui(tk.Tk, tkinter_utils.abstract_window):
         self.main_md_name = find_main_slides_md(self.classnum)
         self.set_pdf_and_tex_names_from_md_name(self.main_md_name)
         self.print_attrs()
-
+        self.set_cwd()
+        
 
     def get_filename(self, attr):
         # - What is my flag for guessing based on classnum?
@@ -294,10 +366,10 @@ class md_gui(tk.Tk, tkinter_utils.abstract_window):
         return self.get_filename('main_tex_name')
     
         
-    def __init__(self):
+    def __init__(self, md_name_in=""):
         super().__init__()
         self.option_add('*tearOff', False)
-        self.geometry("600x400")
+        self.geometry("600x500")
         self.mylabel = 'Tkinter Markdown Slides GUI'
         self.title("MD Beamer Presentation")
         self.resizable(1, 1)
@@ -320,6 +392,8 @@ class md_gui(tk.Tk, tkinter_utils.abstract_window):
         self.menubar.add_cascade(menu=self.build_menu, label='Build')        
         self.menu_file.add_command(label='New Lecture', command=self.on_new_lecture_menu)
         self.menu_file.add_command(label='Save', command=self.on_save_menu)
+        self.menu_file.add_command(label="Choose main md file", \
+                                   command=self.choose_main_md_file_from_dialog)
         self.menu_file.add_command(label='Open Current Slide (pdf)', command=self.on_open_current_slide)
         self.menu_file.add_command(label='Open Main Presentation (pdf)', \
                                    command=self.on_open_main_presentation)        
@@ -342,6 +416,12 @@ class md_gui(tk.Tk, tkinter_utils.abstract_window):
                                    command=self.insert_columns)
         self.menu_edit.add_command(label='Run Highlighting', \
                                    command=self.run_highlights)
+
+        self.menu_file.add_command(label="Open Previous Lecture", \
+                                   command=self.open_previous_lecture)
+
+        self.menu_edit.add_command(label="Go to Slide Number", \
+                                   command=self.on_go_to_slide_menu)
         
         #self.menu_file.add_command(label='Load', command=self.on_load_menu)        
         #menu_file.add_command(label='Open...', command=openFile)
@@ -360,6 +440,7 @@ class md_gui(tk.Tk, tkinter_utils.abstract_window):
         self.bind('<Control-i>', self.insert_image)
         
         self.bind('<Control-h>', self.run_highlights)
+        self.bind('<Control-g>', self.on_go_to_slide_menu)
         #self.bind('<Control-l>', self.on_load_menu)
         
         # configure the root window
@@ -369,6 +450,67 @@ class md_gui(tk.Tk, tkinter_utils.abstract_window):
         self.classnum = None
         #self.load_params()
 
+        if md_name_in:
+            self.open_main_md_file(md_name_in)
+            #self.on_open_main_presentation()
+
+
+    def go_to_slide_number(self, number):
+        # approach:
+        # - get slide number from dialog
+        #     - dialog needs to respond to pressing return or enter
+        # - find all slides from txt_mixin for all lines that start with #
+        # - go to that line number
+        #     - not sure who to do this with tkinter text widget
+        number = int(number)
+        print("received slide number: %s" % number)
+        # how do I open the text list?
+        # - do I read it from the file or from the text widget?
+        #     - how do I handle different newline options?
+        myfile = txt_mixin.txt_file_with_list(self.main_md_name)
+        mylist = myfile.list.findallre("^#")
+        line = mylist[number-1]
+        mytitle = myfile.list[line]
+        print("mytitle: %s" % mytitle)
+        index = self.text.search(mytitle, "1.0")
+        print("line: %s" % line)
+        print("index: %s" % index)
+        self.text.mark_set("insert", "%d.%d" % (line + 1, 0))
+        see_index = float(index) + 2#scroll down two lines
+        see_str = str(see_index)
+        self.text.see(see_str)
+        self.text.focus_set()
+
+
+    def open_previous_lecture(self):
+        # approach:
+        # - assert classnum is > 0
+        # - prev_classnum = classnum - 1
+        # - find md_path for prev class
+        # - os.system to open new gui instance with prev md file
+        classnum = self._get_classnum()
+        if not classnum:
+            self.append_to_log("cannot open previous class if self.classnum is not set: %s" % classnum)
+        prev_classnum = classnum - 1
+        prev_md = find_main_slides_md(prev_classnum)
+        print("prev_md = %s" % prev_md)
+        cmd = "tk_md_editor.py %s &" % prev_md
+        self.append_to_log(cmd)
+        os.system(cmd)
+        
+        
+
+    def open_main_md_file(self, md_path):
+        if os.path.exists(md_path):
+            f = open(md_path, 'r')
+            all_lines = f.read()
+            f.close()
+            self.text.insert('1.0',all_lines)
+            self.run_highlights()
+            self.main_md_open = True
+            self.set_main_folder_and_files(md_path)
+        else:
+            self.append_to_log("path does not exist: %s" % md_path)
 
 
     def set_highlights(self, *args, **kwargs):
@@ -420,6 +562,7 @@ class md_gui(tk.Tk, tkinter_utils.abstract_window):
     ##                 mydict[key] = value
     ##     return mydict
 
+
     def open_main_md_here(self, *args, **kwargs):
         # Approach:
         # - clear self.text
@@ -428,12 +571,7 @@ class md_gui(tk.Tk, tkinter_utils.abstract_window):
         # - put md text in self.text
         self.clear_text()
         main_md = self.get_main_md_name()
-        f = open(main_md, 'r')
-        all_lines = f.read()
-        f.close()
-        self.text.insert('1.0',all_lines)
-        self.run_highlights()
-        self.main_md_open = True
+        self.open_main_md_file(main_md)
         
 
     def save_main_md_file(self, *args, **kwargs):
@@ -471,6 +609,7 @@ class md_gui(tk.Tk, tkinter_utils.abstract_window):
     def get_cursor_position(self, *args, **kwargs):
         cursor = self.text.index(tk.INSERT)
         return cursor
+
 
     def insert_columns(self, *args, **kwargs):
         cursor = self.get_cursor_position()
@@ -523,9 +662,10 @@ class md_gui(tk.Tk, tkinter_utils.abstract_window):
         
     def on_open_main_presentation(self, *args, **kwargs):
         pdfname = find_main_pdf(self.classnum)
-        cmd = "skim %s &" % pdfname
-        print(cmd)
-        os.system(cmd)
+        if os.path.exists(pdfname):
+            cmd = "skim %s &" % pdfname
+            print(cmd)
+            os.system(cmd)
 
 
     def get_current_text(self):
@@ -535,14 +675,23 @@ class md_gui(tk.Tk, tkinter_utils.abstract_window):
 
     def build_full_pres(self, *args, **kwargs):
         # save if open:
+        self.append_to_log("starting md to beamer")
+        time.sleep(0.1)
         if self.main_md_open:
             self.save_main_md_file()
         md_name = self.get_main_md_name()
         #md_name = find_main_slides_md(self.classnum)
         # build current slide
         cmd = "md_to_beamer_pres.py %s" % md_name
-        print(cmd)
+        self.append_to_log(cmd)
         os.system(cmd)
+        #output, errors = run(cmd)
+        ## p = subprocess.Popen(cmd, shell=True, \
+        ##              stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        ## output, errors = p.communicate()
+        #print("output: %s" % output)
+        #print("errors: %s" % errors)
+        self.append_to_log("done building main pdf")
         
 
     def build_current_slide(self, *args, **kwargs):
@@ -597,6 +746,12 @@ class md_gui(tk.Tk, tkinter_utils.abstract_window):
                                             class_prep_root=class_prep_root)
         mydialog.grab_set()
 
+
+    def on_go_to_slide_menu(self, *args, **kwargs):
+        mydialog = get_slide_number_dialog(parent=self)
+        mydialog.grab_set()
+        
+        
 
 ## ############################
 ##     def key_pressed(self, event):
@@ -656,6 +811,9 @@ class md_gui(tk.Tk, tkinter_utils.abstract_window):
 
         
         self.button_frame1.grid(row=20, column=0)
+        self.log_box = CustomText(self, width=40, height=4, font=("Courier", 16))
+        self.log_box.grid(row=25,column=0,sticky='EW', **self.options)
+
 
 
 class App(tk.Tk):
@@ -669,6 +827,20 @@ class App(tk.Tk):
         #self.rowconfigure(1, weight=3)
         #self.grid_columnconfigure(0, weight=3)
 
+
 if __name__ == "__main__":
-    app = md_gui()
+    import argparse
+    parser = argparse.ArgumentParser()
+    #parser.add_argument('--example', nargs='?', const=1, type=int, default=3)
+    parser.add_argument('md_filename', type=str, nargs='?', \
+                        default='', \
+                        help='name of markdown input file')
+
+    args = parser.parse_args()
+
+    md_name = args.md_filename
+    print("md_name = %s" % md_name)
+    md_abs_path = os.path.abspath(md_name)
+    print("md_abs_path = %s" % md_abs_path)
+    app = md_gui(md_abs_path)
     app.mainloop()
